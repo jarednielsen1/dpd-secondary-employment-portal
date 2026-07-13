@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Secondary Employment Support Portal</title>
-<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+<script src="https://alcdn.msauth.net/browser/2.35.0/js/msal-browser.min.js"
+  onerror="this.onerror=null;var s=document.createElement('script');s.src='https://alcdn.msftauth.net/browser/2.35.0/js/msal-browser.min.js';s.onerror=function(){window.__msalLoadFailed=true;};document.head.appendChild(s);"></script>
 <style>
   :root{
     --navy:#0F1F3D;
@@ -428,7 +429,14 @@ const msalConfig = {
   },
   cache: { cacheLocation: "sessionStorage" }
 };
-const msalInstance = new msal.PublicClientApplication(msalConfig);
+let msalInstance = null;
+try{
+  if(typeof msal !== "undefined"){
+    msalInstance = new msal.PublicClientApplication(msalConfig);
+  }
+}catch(err){
+  console.error("MSAL failed to initialize:", err);
+}
 
 let currentUser = null;
 let spToken = null;
@@ -446,6 +454,10 @@ document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () =>
 document.querySelectorAll("th[data-sort]").forEach(th => th.addEventListener("click", () => sortBy(th.dataset.sort)));
 
 async function signIn(){
+  if(!msalInstance){
+    alert("The Microsoft sign-in library failed to load (network/CDN issue). Check your internet connection or ask IT if alcdn.msauth.net / alcdn.msftauth.net are blocked on this network, then reload the page.");
+    return;
+  }
   try{
     const graphResult = await msalInstance.loginPopup({ scopes: ["User.Read"] });
     msalInstance.setActiveAccount(graphResult.account);
