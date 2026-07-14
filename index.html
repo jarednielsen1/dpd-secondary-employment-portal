@@ -173,6 +173,7 @@
   .status-New{background:#E8F0FE;color:#1A56DB;}
   .status-InProgress{background:#FEF3C7;color:#92400E;}
   .status-Completed{background:#DCFCE7;color:#166534;}
+  .status-Merged{background:#E5E7EB;color:#374151;}
 
   #emptyState{
     text-align:center;
@@ -348,8 +349,13 @@
         <option value="New">New</option>
         <option value="In Progress">In Progress</option>
         <option value="Completed">Completed</option>
+        <option value="Merged">Merged</option>
       </select>
       <input type="text" id="searchBox" placeholder="Search name, email, title...">
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;color:var(--text);cursor:pointer;">
+        <input type="checkbox" id="hideMergedCheckbox" checked> Hide merged tickets
+      </label>
+      <span id="lastSyncedLabel" style="font-size:12px;color:var(--muted);"></span>
       <div class="stat-pills" id="statPills"></div>
     </div>
     <table>
@@ -478,6 +484,7 @@
           <option value="New">New</option>
           <option value="In Progress">In Progress</option>
           <option value="Completed">Completed</option>
+          <option value="Merged">Merged</option>
         </select>
       </div>
       <div class="field-row" id="noNotifyRow" style="display:none;">
@@ -597,6 +604,7 @@ let allTickets = [];
 let allAuditEntries = [];
 let allAlertRules = [];
 let selectedRuleColor = PRESET_COLORS[0].hex;
+let pollIntervalId = null;
 let currentTicketId = null;
 let originalSnapshot = null;
 
@@ -605,6 +613,7 @@ document.getElementById("modalClose").addEventListener("click", closeModal);
 document.getElementById("cancelBtn").addEventListener("click", closeModal);
 document.getElementById("saveBtn").addEventListener("click", saveTicket);
 document.getElementById("filterStatus").addEventListener("change", renderTickets);
+document.getElementById("hideMergedCheckbox").addEventListener("change", renderTickets);
 document.getElementById("searchBox").addEventListener("input", renderTickets);
 document.getElementById("exportCsvBtn").addEventListener("click", exportCsv);
 document.getElementById("auditSearchBox").addEventListener("input", renderAuditLog);
@@ -698,10 +707,16 @@ async function signIn(){
     document.getElementById("mainApp").style.display = "block";
     document.getElementById("userBox").innerHTML =
       `${currentUser.name}<br><button id="signOutBtn">Sign Out</button>`;
-    document.getElementById("signOutBtn").addEventListener("click", () => msalInstance.logoutPopup());
+    document.getElementById("signOutBtn").addEventListener("click", () => {
+      stopPolling();
+      msalInstance.logoutPopup();
+    });
     await loadTickets();
     await loadAuditLog();
     await loadAlertRules();
+    const label = document.getElementById("lastSyncedLabel");
+    if(label) label.textContent = `Synced ${new Date().toLocaleTimeString()}`;
+    startPolling();
   }catch(err){
     console.error(err);
     alert("Sign-in failed. Check the console for details.");
@@ -725,6 +740,44 @@ async function loadTickets(){
   allTickets = data.value;
   renderTickets();
   renderDashboard();
+}
+
+async function silentTokenRefresh(){
+  try{
+    const account = msalInstance.getActiveAccount();
+    if(!account) return false;
+    const spResult = await msalInstance.acquireTokenSilent({
+      scopes: [`${new URL(CONFIG.siteUrl).origin}/AllSites.Write`],
+      account
+    });
+    spToken = spResult.accessToken;
+    return true;
+  }catch(err){
+    console.error("Silent token refresh failed:", err);
+    return false;
+  }
+}
+
+async function pollForUpdates(){
+  const refreshed = await silentTokenRefresh();
+  if(!refreshed) return; // skip this cycle rather than fail loudly; will retry in 60s
+  await loadTickets();
+  await loadAuditLog();
+  await loadAlertRules();
+  const label = document.getElementById("lastSyncedLabel");
+  if(label) label.textContent = `Synced ${new Date().toLocaleTimeString()}`;
+}
+
+function startPolling(){
+  if(pollIntervalId) clearInterval(pollIntervalId);
+  pollIntervalId = setInterval(pollForUpdates, 60000);
+}
+
+function stopPolling(){
+  if(pollIntervalId){
+    clearInterval(pollIntervalId);
+    pollIntervalId = null;
+  }
 }
 
 async function loadAlertRules(){
@@ -772,7 +825,7 @@ function ruleThresholdMoment(rule, startDate){
 
 function getAlertColorForTicket(ticket){
   if(!ticket[FIELDS.receivedOn]) return null;
-  if(ticket[FIELDS.status] === "Completed") return null;
+  if(ticket[FIELDS.status] === "Completed" || ticket[FIELDS.status] === "Merged") return null;
   const start = new Date(ticket[FIELDS.receivedOn]);
   const now = new Date();
   let mostSevere = null;
@@ -989,8 +1042,11 @@ function sortBy(field){
 function getFiltered(){
   const status = document.getElementById("filterStatus").value;
   const search = document.getElementById("searchBox").value.toLowerCase();
+  const hideMerged = document.getElementById("hideMergedCheckbox").checked;
   return allTickets.filter(t => {
-    if(status && (t[FIELDS.status] || "New") !== status) return false;
+    const ticketStatus = t[FIELDS.status] || "New";
+    if(hideMerged && ticketStatus === "Merged" && !status) return false;
+    if(status && ticketStatus !== status) return false;
     if(search){
       const hay = `${t[FIELDS.title]||""} ${t[FIELDS.email]||""} ${t.Title||""}`.toLowerCase();
       if(!hay.includes(search)) return false;
@@ -1032,12 +1088,13 @@ function renderTickets(){
   });
 
   // stat pills
-  const counts = { New:0, "In Progress":0, Completed:0 };
+  const counts = { New:0, "In Progress":0, Completed:0, Merged:0 };
   allTickets.forEach(t => { const s = t[FIELDS.status] || "New"; counts[s] = (counts[s]||0)+1; });
   document.getElementById("statPills").innerHTML = `
     <div class="pill"><b>${counts.New}</b> New</div>
     <div class="pill"><b>${counts["In Progress"]}</b> In Progress</div>
     <div class="pill"><b>${counts.Completed}</b> Completed</div>
+    <div class="pill"><b>${counts.Merged}</b> Merged</div>
   `;
 }
 
@@ -1144,7 +1201,7 @@ async function mergeIntoTicket(){
 
     const mergeNoteForSource = `${source[FIELDS.internalNotes] ? source[FIELDS.internalNotes] + "\n\n" : ""}Merged into Ticket #${target.Id} by ${staff} on ${formatDate(now)}.`;
     await patchTicket(digest, source.Id, {
-      [FIELDS.status]: "Completed",
+      [FIELDS.status]: "Merged",
       [FIELDS.completed]: true,
       [FIELDS.completedOn]: now,
       [FIELDS.completedBy]: staff,
@@ -1159,7 +1216,7 @@ async function mergeIntoTicket(){
       [AUDIT_FIELDS.logTime]: now,
       [AUDIT_FIELDS.action]: `Merged into Ticket #${target.Id} (no customer email sent)`,
       [AUDIT_FIELDS.previousStatus]: originalSnapshot ? originalSnapshot.status : "",
-      [AUDIT_FIELDS.newStatus]: "Completed",
+      [AUDIT_FIELDS.newStatus]: "Merged",
       [AUDIT_FIELDS.internalNotesSnapshot]: mergeNoteForSource,
       [AUDIT_FIELDS.customerNoteSnapshot]: source[FIELDS.customerNote] || ""
     });
