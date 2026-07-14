@@ -222,6 +222,8 @@
   }
   .field-row label{color:var(--muted);font-weight:600;padding-top:6px;}
   .field-row .val{padding-top:6px;}
+  #mProblem{white-space:pre-wrap;word-break:break-word;line-height:1.5;}
+  #mProblem a{color:var(--red);}
   .field-row textarea, .field-row select{
     width:100%;
     padding:8px 10px;
@@ -322,7 +324,7 @@
         <tr>
           <th data-sort="ID">#</th>
           <th data-sort="Created">Received</th>
-          <th data-sort="Title">Requester</th>
+          <th data-sort="Title">Title</th>
           <th data-sort="Email">Email</th>
           <th data-sort="Status">Status</th>
           <th data-sort="CompletedBy">Completed By</th>
@@ -356,7 +358,7 @@
       <button id="modalClose">&times;</button>
     </div>
     <div class="modal-body">
-      <div class="field-row"><label>Requester</label><div class="val" id="mReq"></div></div>
+      <div class="field-row"><label>Title</label><div class="val" id="mReq"></div></div>
       <div class="field-row"><label>Email</label><div class="val" id="mEmail"></div></div>
       <div class="field-row"><label>Received</label><div class="val" id="mCreated"></div></div>
       <div class="field-row"><label>Problem</label><div class="val" id="mProblem"></div></div>
@@ -577,7 +579,7 @@ function openModal(id){
   document.getElementById("mReq").textContent = t.Title || "";
   document.getElementById("mEmail").textContent = t[FIELDS.email] || "";
   document.getElementById("mCreated").textContent = formatDate(t[FIELDS.receivedOn]);
-  document.getElementById("mProblem").textContent = t[FIELDS.problem] || "";
+  document.getElementById("mProblem").innerHTML = formatProblemHtml(t[FIELDS.problem]);
   document.getElementById("mStatus").value = t[FIELDS.status] || "New";
   document.getElementById("mInternal").value = t[FIELDS.internalNotes] || "";
   document.getElementById("mCustomer").value = t[FIELDS.customerNote] || "";
@@ -739,6 +741,24 @@ function escapeHtml(str){
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
+}
+
+function cleanEmailText(str){
+  if(!str) return "";
+  return str
+    .replace(/\[cid:[^\]]*\]/g, "")       // strip inline image placeholders (no actual image data)
+    .replace(/[ \t]+\n/g, "\n")           // trim trailing spaces before line breaks
+    .replace(/\n[ \t]+\n/g, "\n\n")       // clean up blank lines that have stray whitespace
+    .replace(/\n{3,}/g, "\n\n")           // collapse 3+ line breaks down to a single blank line
+    .trim();
+}
+
+function formatProblemHtml(raw){
+  const cleaned = cleanEmailText(raw);
+  let escaped = escapeHtml(cleaned);
+  // turn bracketed signature links into real clickable links
+  escaped = escaped.replace(/\[(https?:\/\/[^\]]+)\]/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  return escaped || "<em style=\"color:var(--muted);\">No details provided.</em>";
 }
 </script>
 </body>
