@@ -413,12 +413,13 @@ const FIELDS = {
   email: "Email",
   problem: "Problem",
   customerNote: "CustomerNote",
-  internalNotes: "InternalNotes",
+  internalNotes: "Notes",
   completed: "Completed",
   completedOn: "Completedon",
   completedBy: "Completedby",
   status: "Status",
-  customerNotified: "CustomerNotified"
+  customerNotified: "CustomerNotified",
+  receivedOn: "ReceivedOn"
 };
 
 const msalConfig = {
@@ -512,7 +513,7 @@ function switchTab(viewId){
 
 let sortField = "Id", sortDir = -1;
 function sortBy(field){
-  const map = { ID:"Id", Created:"Created", Title:FIELDS.title, Email:FIELDS.email, Status:FIELDS.status, CompletedBy:FIELDS.completedBy };
+  const map = { ID:"Id", Created:FIELDS.receivedOn, Title:FIELDS.title, Email:FIELDS.email, Status:FIELDS.status, CompletedBy:FIELDS.completedBy };
   const key = map[field] || field;
   if(sortField === key) sortDir *= -1; else { sortField = key; sortDir = 1; }
   renderTickets();
@@ -548,7 +549,7 @@ function renderTickets(){
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${t.Id}</td>
-      <td>${formatDate(t.Created)}</td>
+      <td>${formatDate(t[FIELDS.receivedOn])}</td>
       <td>${escapeHtml(t.Title || "")}</td>
       <td>${escapeHtml(t[FIELDS.email] || "")}</td>
       <td><span class="status-badge ${badgeClass}">${status}</span></td>
@@ -575,7 +576,7 @@ function openModal(id){
   document.getElementById("modalTitle").textContent = `Ticket #${id}`;
   document.getElementById("mReq").textContent = t.Title || "";
   document.getElementById("mEmail").textContent = t[FIELDS.email] || "";
-  document.getElementById("mCreated").textContent = formatDate(t.Created);
+  document.getElementById("mCreated").textContent = formatDate(t[FIELDS.receivedOn]);
   document.getElementById("mProblem").textContent = t[FIELDS.problem] || "";
   document.getElementById("mStatus").value = t[FIELDS.status] || "New";
   document.getElementById("mInternal").value = t[FIELDS.internalNotes] || "";
@@ -672,8 +673,8 @@ function renderDashboard(){
   const newCount = allTickets.filter(t => !t[FIELDS.status] || t[FIELDS.status] === "New");
 
   const resTimes = completed
-    .filter(t => t.Created && t[FIELDS.completedOn])
-    .map(t => (new Date(t[FIELDS.completedOn]) - new Date(t.Created)) / (1000*60*60*24));
+    .filter(t => t[FIELDS.receivedOn] && t[FIELDS.completedOn])
+    .map(t => (new Date(t[FIELDS.completedOn]) - new Date(t[FIELDS.receivedOn])) / (1000*60*60*24));
   const avgDays = resTimes.length ? (resTimes.reduce((a,b)=>a+b,0)/resTimes.length).toFixed(1) : "—";
 
   document.getElementById("dashCards").innerHTML = `
@@ -707,7 +708,7 @@ function exportCsv(){
   const headers = ["ID","Received","Requester","Email","Problem","Status","Internal Notes","Customer Note","Completed On","Completed By"];
   const rows = list.map(t => [
     t.Id,
-    formatDate(t.Created),
+    formatDate(t[FIELDS.receivedOn]),
     t.Title || "",
     t[FIELDS.email] || "",
     t[FIELDS.problem] || "",
