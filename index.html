@@ -284,6 +284,26 @@
   .bar-track{flex:1;background:#EEF1F6;border-radius:4px;height:10px;overflow:hidden;}
   .bar-fill{height:100%;background:var(--navy);}
   .bar-row .count{width:34px;text-align:right;font-weight:600;}
+
+  .color-swatch{
+    width:34px;height:34px;border-radius:50%;cursor:pointer;
+    border:3px solid transparent;
+  }
+  .color-swatch.selected{border-color:var(--navy);box-shadow:0 0 0 2px #fff inset;}
+  .rule-item{
+    display:flex;align-items:center;gap:12px;padding:12px 0;
+    border-bottom:1px solid var(--border);font-size:13px;
+  }
+  .rule-item:last-child{border-bottom:none;}
+  .rule-dot{width:16px;height:16px;border-radius:50%;flex-shrink:0;}
+  .rule-desc{flex:1;}
+  .rule-item button{
+    background:none;border:1px solid var(--border);border-radius:6px;
+    padding:5px 12px;font-size:12px;cursor:pointer;color:var(--red);
+  }
+  tr.alert-row td:first-child{
+    border-left:5px solid var(--alert-color, transparent);
+  }
 </style>
 </head>
 <body>
@@ -312,6 +332,7 @@
     <div class="tab active" data-view="ticketsView">Tickets</div>
     <div class="tab" data-view="dashView">Activity &amp; Reports</div>
     <div class="tab" data-view="auditView">Audit Log</div>
+    <div class="tab" data-view="adminView">Admin</div>
   </div>
 
   <!-- TICKETS VIEW -->
@@ -378,6 +399,45 @@
       <h3>Export</h3>
       <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">Download the full audit trail, including note snapshots.</p>
       <button class="btn btn-primary" id="exportAuditCsvBtn">Download Audit CSV</button>
+    </div>
+  </div>
+
+  <!-- ADMIN VIEW -->
+  <div class="view" id="adminView">
+    <div class="dash-section">
+      <h3>Create Aging Alert</h3>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">Tickets that haven't been marked Completed will show a colored stripe once they've been open longer than the threshold you set. If a ticket crosses more than one rule, the most severe one shown.</p>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:8px;">Color</label>
+        <div id="colorPalette" style="display:flex;gap:10px;"></div>
+      </div>
+
+      <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">
+        <div>
+          <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:6px;">After</label>
+          <input type="number" id="ruleThresholdValue" min="1" value="24" style="width:90px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:6px;">Unit</label>
+          <select id="ruleThresholdUnit" style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+            <option value="Hours">Hours</option>
+            <option value="Days">Days</option>
+          </select>
+        </div>
+        <div id="excludeWeekendsWrap" style="display:none;padding-bottom:9px;">
+          <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" id="ruleExcludeWeekends"> Exclude weekends (business days)
+          </label>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" id="createRuleBtn" style="background:var(--navy);">Create Alert Rule</button>
+    </div>
+
+    <div class="dash-section">
+      <h3>Active Alert Rules</h3>
+      <div id="rulesList"></div>
     </div>
   </div>
 </main>
@@ -461,7 +521,8 @@ const CONFIG = {
   siteUrl: "https://dallastxgov.sharepoint.com/sites/PDPersonnelUnit",
   listTitle: "Secondary Employment Requests",
   auditListTitle: "Secondary Employment Audit Log",
-  staffListTitle: "Support Staff"
+  staffListTitle: "Support Staff",
+  alertRulesListTitle: "Secondary Employment Alert Rules"
 };
 
 // Map of logical field -> SharePoint internal column name.
@@ -491,6 +552,23 @@ const AUDIT_FIELDS = {
   customerNoteSnapshot: "CustomerNoteSnapshot"
 };
 
+const ALERT_FIELDS = {
+  color: "Color",
+  thresholdValue: "ThresholdValue",
+  thresholdUnit: "ThresholdUnit",
+  excludeWeekends: "ExcludeWeekends",
+  active: "Active"
+};
+
+const PRESET_COLORS = [
+  { name: "Yellow", hex: "#F5C518" },
+  { name: "Orange", hex: "#E67E22" },
+  { name: "Red", hex: "#C0392B" },
+  { name: "Purple", hex: "#8E44AD" },
+  { name: "Blue", hex: "#2E86DE" },
+  { name: "Gray", hex: "#7F8C8D" }
+];
+
 const msalConfig = {
   auth: {
     clientId: CONFIG.clientId,
@@ -512,6 +590,8 @@ let currentUser = null;
 let spToken = null;
 let allTickets = [];
 let allAuditEntries = [];
+let allAlertRules = [];
+let selectedRuleColor = PRESET_COLORS[0].hex;
 let currentTicketId = null;
 let originalSnapshot = null;
 
@@ -524,6 +604,27 @@ document.getElementById("searchBox").addEventListener("input", renderTickets);
 document.getElementById("exportCsvBtn").addEventListener("click", exportCsv);
 document.getElementById("auditSearchBox").addEventListener("input", renderAuditLog);
 document.getElementById("exportAuditCsvBtn").addEventListener("click", exportAuditCsv);
+document.getElementById("ruleThresholdUnit").addEventListener("change", () => {
+  document.getElementById("excludeWeekendsWrap").style.display =
+    document.getElementById("ruleThresholdUnit").value === "Days" ? "block" : "none";
+});
+document.getElementById("createRuleBtn").addEventListener("click", createAlertRule);
+
+(function renderColorPalette(){
+  const wrap = document.getElementById("colorPalette");
+  PRESET_COLORS.forEach((c, i) => {
+    const swatch = document.createElement("div");
+    swatch.className = "color-swatch" + (i === 0 ? " selected" : "");
+    swatch.style.background = c.hex;
+    swatch.title = c.name;
+    swatch.addEventListener("click", () => {
+      selectedRuleColor = c.hex;
+      document.querySelectorAll(".color-swatch").forEach(s => s.classList.remove("selected"));
+      swatch.classList.add("selected");
+    });
+    wrap.appendChild(swatch);
+  });
+})();
 document.getElementById("mStatus").addEventListener("change", () => {
   document.getElementById("noNotifyRow").style.display =
     (document.getElementById("mStatus").value === "Completed") ? "grid" : "none";
@@ -595,6 +696,7 @@ async function signIn(){
     document.getElementById("signOutBtn").addEventListener("click", () => msalInstance.logoutPopup());
     await loadTickets();
     await loadAuditLog();
+    await loadAlertRules();
   }catch(err){
     console.error(err);
     alert("Sign-in failed. Check the console for details.");
@@ -618,6 +720,169 @@ async function loadTickets(){
   allTickets = data.value;
   renderTickets();
   renderDashboard();
+}
+
+async function loadAlertRules(){
+  try{
+    const url = `${CONFIG.siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.alertRulesListTitle)}')/items?$top=200`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${spToken}`, Accept: "application/json;odata=nometadata" }
+    });
+    if(!res.ok){
+      console.error("Alert rules failed to load:", await res.text());
+      return;
+    }
+    const data = await res.json();
+    allAlertRules = data.value.filter(r => r[ALERT_FIELDS.active] !== false);
+    renderTickets();
+  }catch(err){
+    console.error(err);
+  }
+}
+
+function ruleDescription(rule){
+  const unit = rule[ALERT_FIELDS.thresholdUnit];
+  const val = rule[ALERT_FIELDS.thresholdValue];
+  const biz = rule[ALERT_FIELDS.excludeWeekends];
+  if(unit === "Days") return `${val} ${biz ? "business " : ""}day${val==1?"":"s"}`;
+  return `${val} hour${val==1?"":"s"}`;
+}
+
+function ruleThresholdMoment(rule, startDate){
+  const val = Number(rule[ALERT_FIELDS.thresholdValue]) || 0;
+  const unit = rule[ALERT_FIELDS.thresholdUnit];
+  if(unit === "Days" && rule[ALERT_FIELDS.excludeWeekends]){
+    let date = new Date(startDate);
+    let added = 0;
+    while(added < Math.floor(val)){
+      date.setDate(date.getDate() + 1);
+      const day = date.getDay();
+      if(day !== 0 && day !== 6) added++;
+    }
+    return date;
+  }
+  const ms = unit === "Days" ? val * 24 * 60 * 60 * 1000 : val * 60 * 60 * 1000;
+  return new Date(new Date(startDate).getTime() + ms);
+}
+
+function getAlertColorForTicket(ticket){
+  if(!ticket[FIELDS.receivedOn]) return null;
+  if(ticket[FIELDS.status] === "Completed") return null;
+  const start = new Date(ticket[FIELDS.receivedOn]);
+  const now = new Date();
+  let mostSevere = null;
+  allAlertRules.forEach(rule => {
+    const moment = ruleThresholdMoment(rule, start);
+    if(now >= moment){
+      if(!mostSevere || moment > mostSevere.moment){
+        mostSevere = { color: rule[ALERT_FIELDS.color], moment };
+      }
+    }
+  });
+  return mostSevere ? mostSevere.color : null;
+}
+
+function renderAdminRules(){
+  const wrap = document.getElementById("rulesList");
+  if(!allAlertRules.length){
+    wrap.innerHTML = `<p style="color:var(--muted);font-size:13px;">No alert rules yet. Create one above.</p>`;
+    return;
+  }
+  wrap.innerHTML = allAlertRules
+    .slice()
+    .sort((a,b) => (a[ALERT_FIELDS.thresholdUnit]===b[ALERT_FIELDS.thresholdUnit] ? a[ALERT_FIELDS.thresholdValue]-b[ALERT_FIELDS.thresholdValue] : 0))
+    .map(rule => `
+      <div class="rule-item">
+        <div class="rule-dot" style="background:${rule[ALERT_FIELDS.color]}"></div>
+        <div class="rule-desc">Turns this color after <b>${ruleDescription(rule)}</b> open</div>
+        <button data-id="${rule.Id}" class="deleteRuleBtn">Delete</button>
+      </div>
+    `).join("");
+  document.querySelectorAll(".deleteRuleBtn").forEach(btn => {
+    btn.addEventListener("click", () => deleteAlertRule(parseInt(btn.dataset.id, 10)));
+  });
+}
+
+async function createAlertRule(){
+  const val = parseFloat(document.getElementById("ruleThresholdValue").value);
+  const unit = document.getElementById("ruleThresholdUnit").value;
+  const excludeWeekends = unit === "Days" && document.getElementById("ruleExcludeWeekends").checked;
+  if(!val || val <= 0){
+    alert("Enter a threshold greater than 0.");
+    return;
+  }
+  const btn = document.getElementById("createRuleBtn");
+  btn.disabled = true;
+  try{
+    const digestRes = await fetch(`${CONFIG.siteUrl}/_api/contextinfo`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${spToken}`, Accept: "application/json;odata=nometadata" }
+    });
+    const digest = (await digestRes.json()).FormDigestValue;
+
+    const url = `${CONFIG.siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.alertRulesListTitle)}')/items`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${spToken}`,
+        Accept: "application/json;odata=nometadata",
+        "Content-Type": "application/json;odata=nometadata",
+        "X-RequestDigest": digest
+      },
+      body: JSON.stringify({
+        Title: `${selectedRuleColor} at ${val} ${unit}`,
+        [ALERT_FIELDS.color]: selectedRuleColor,
+        [ALERT_FIELDS.thresholdValue]: val,
+        [ALERT_FIELDS.thresholdUnit]: unit,
+        [ALERT_FIELDS.excludeWeekends]: excludeWeekends,
+        [ALERT_FIELDS.active]: true
+      })
+    });
+    if(!res.ok){
+      console.error(await res.text());
+      alert("Failed to create rule — see console.");
+      return;
+    }
+    await loadAlertRules();
+    renderAdminRules();
+  }catch(err){
+    console.error(err);
+    alert("Failed to create rule — see console.");
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+async function deleteAlertRule(id){
+  if(!confirm("Delete this alert rule?")) return;
+  try{
+    const digestRes = await fetch(`${CONFIG.siteUrl}/_api/contextinfo`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${spToken}`, Accept: "application/json;odata=nometadata" }
+    });
+    const digest = (await digestRes.json()).FormDigestValue;
+    const res = await fetch(
+      `${CONFIG.siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.alertRulesListTitle)}')/items(${id})`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${spToken}`,
+          "X-RequestDigest": digest,
+          "IF-MATCH": "*",
+          "X-HTTP-Method": "DELETE"
+        }
+      }
+    );
+    if(!res.ok){
+      console.error(await res.text());
+      alert("Failed to delete rule — see console.");
+      return;
+    }
+    await loadAlertRules();
+    renderAdminRules();
+  }catch(err){
+    console.error(err);
+  }
 }
 
 async function loadAuditLog(){
@@ -705,6 +970,7 @@ function switchTab(viewId){
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === viewId));
   if(viewId === "dashView") renderDashboard();
   if(viewId === "auditView") renderAuditLog();
+  if(viewId === "adminView") renderAdminRules();
 }
 
 let sortField = "Id", sortDir = -1;
@@ -752,6 +1018,11 @@ function renderTickets(){
       <td>${escapeHtml(t[FIELDS.completedBy] || "")}</td>
     `;
     tr.addEventListener("click", () => openModal(t.Id));
+    const alertColor = getAlertColorForTicket(t);
+    if(alertColor){
+      tr.classList.add("alert-row");
+      tr.style.setProperty("--alert-color", alertColor);
+    }
     body.appendChild(tr);
   });
 
