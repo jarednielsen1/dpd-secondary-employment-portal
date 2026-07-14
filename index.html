@@ -344,6 +344,7 @@
   <!-- TICKETS VIEW -->
   <div class="view active" id="ticketsView">
     <div class="toolbar">
+      <button class="btn btn-primary" id="openManualEntryBtn" style="background:var(--navy);">+ Manual Entry</button>
       <select id="filterStatus">
         <option value="">All statuses</option>
         <option value="New">New</option>
@@ -520,6 +521,81 @@
   </div>
 </div>
 
+<!-- MANUAL ENTRY MODAL -->
+<div class="modal-overlay" id="manualEntryOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Manual Ticket Entry</h2>
+      <button id="manualEntryClose">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field-row">
+        <label>Support Method</label>
+        <div style="display:flex;gap:18px;padding-top:6px;">
+          <label style="font-weight:400;display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+            <input type="radio" name="meMethod" id="meMethodPhone" value="Phone" checked> Phone
+          </label>
+          <label style="font-weight:400;display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+            <input type="radio" name="meMethod" id="meMethodEmail" value="Email"> Email
+          </label>
+        </div>
+      </div>
+      <div class="field-row">
+        <label>Requestor Name</label>
+        <input type="text" id="meRequesterName" placeholder="First Last" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+      </div>
+      <div class="field-row" id="mePhoneRow">
+        <label>Phone Number</label>
+        <input type="text" id="mePhoneNumber" placeholder="214-555-0100" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+      </div>
+      <div class="field-row" id="meEmailRow">
+        <label>Email</label>
+        <input type="email" id="meEmail" placeholder="name@dallaspolice.gov" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+      </div>
+      <div class="field-row">
+        <label>Problem Title</label>
+        <input type="text" id="meTitle" placeholder="Short summary of the issue" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+      </div>
+      <div class="field-row">
+        <label>Description</label>
+        <textarea id="meDescription" placeholder="What happened, what was discussed..."></textarea>
+      </div>
+      <div class="field-row">
+        <label>Status</label>
+        <select id="meStatus">
+          <option value="New">New</option>
+          <option value="In Progress">In Progress</option>
+          <option value="Completed">Completed</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <label>Internal Notes</label>
+        <textarea id="meInternal" placeholder="Staff-only notes (optional)..."></textarea>
+      </div>
+      <div class="field-row" id="meCustomerNoteRow" style="display:none;">
+        <label>Customer Note</label>
+        <div>
+          <textarea id="meCustomerNote" placeholder="Emailed to the requester if an email address is on file and notification isn't skipped below."></textarea>
+        </div>
+      </div>
+      <div class="field-row" id="meNoNotifyRow" style="display:none;">
+        <label></label>
+        <div>
+          <label style="font-weight:400;display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+            <input type="checkbox" id="meNoNotify" checked> Don't email the customer
+          </label>
+          <div class="hint">Checked by default for phone-resolved issues. Uncheck if you want the closing note emailed.</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <div class="save-msg" id="meSaveMsg"></div>
+      <button class="btn btn-secondary" id="meCancelBtn">Cancel</button>
+      <button class="btn btn-primary" id="meSaveBtn" style="background:var(--navy);">Create Ticket</button>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ============================================================
    CONFIG — verify FIELDS internal names before first real use.
@@ -550,7 +626,11 @@ const FIELDS = {
   completedBy: "Completedby",
   status: "Status",
   customerNotified: "CustomerNotified",
-  receivedOn: "ReceivedOn"
+  receivedOn: "ReceivedOn",
+  entryType: "EntryType",
+  source: "Source",
+  requesterName: "RequesterName",
+  phoneNumber: "PhoneNumber"
 };
 
 const AUDIT_FIELDS = {
@@ -649,6 +729,18 @@ document.getElementById("toggleMergeLink").addEventListener("click", (e) => {
   panel.style.display = panel.style.display === "none" ? "block" : "none";
 });
 document.getElementById("mergeBtn").addEventListener("click", mergeIntoTicket);
+
+document.getElementById("openManualEntryBtn").addEventListener("click", openManualEntryModal);
+document.getElementById("manualEntryClose").addEventListener("click", closeManualEntryModal);
+document.getElementById("meCancelBtn").addEventListener("click", closeManualEntryModal);
+document.getElementById("meSaveBtn").addEventListener("click", createManualEntry);
+document.getElementById("meMethodPhone").addEventListener("change", updateManualEntryMethodFields);
+document.getElementById("meMethodEmail").addEventListener("change", updateManualEntryMethodFields);
+document.getElementById("meStatus").addEventListener("change", () => {
+  const isCompleted = document.getElementById("meStatus").value === "Completed";
+  document.getElementById("meCustomerNoteRow").style.display = isCompleted ? "grid" : "none";
+  document.getElementById("meNoNotifyRow").style.display = isCompleted ? "grid" : "none";
+});
 document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => switchTab(t.dataset.view)));
 document.querySelectorAll("th[data-sort]").forEach(th => th.addEventListener("click", () => sortBy(th.dataset.sort)));
 
@@ -975,7 +1067,7 @@ function renderAuditLog(){
     tr.style.cursor = "default";
     tr.innerHTML = `
       <td>${formatDate(e[AUDIT_FIELDS.logTime])}</td>
-      <td>#${e[AUDIT_FIELDS.ticketId] ?? ""}</td>
+      <td>#${formatTicketId(e[AUDIT_FIELDS.ticketId])}</td>
       <td>${escapeHtml(e[AUDIT_FIELDS.staffMember] || "")}</td>
       <td>${escapeHtml(e[AUDIT_FIELDS.action] || "")}</td>
     `;
@@ -988,7 +1080,7 @@ function exportAuditCsv(){
   const headers = ["Time","Ticket #","Staff Member","Action","Previous Status","New Status","Internal Notes Snapshot","Customer Note Snapshot"];
   const rows = allAuditEntries.map(e => [
     formatDate(e[AUDIT_FIELDS.logTime]),
-    e[AUDIT_FIELDS.ticketId] ?? "",
+    formatTicketId(e[AUDIT_FIELDS.ticketId]),
     e[AUDIT_FIELDS.staffMember] || "",
     e[AUDIT_FIELDS.action] || "",
     e[AUDIT_FIELDS.previousStatus] || "",
@@ -1071,7 +1163,7 @@ function renderTickets(){
     const badgeClass = "status-" + status.replace(" ", "");
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${t.Id}</td>
+      <td>${formatTicketId(t.Id)}</td>
       <td>${formatDate(t[FIELDS.receivedOn])}</td>
       <td>${escapeHtml(t.Title || "")}</td>
       <td>${escapeHtml(t[FIELDS.email] || "")}</td>
@@ -1107,7 +1199,7 @@ function openModal(id){
     internalNotes: t[FIELDS.internalNotes] || "",
     customerNote: t[FIELDS.customerNote] || ""
   };
-  document.getElementById("modalTitle").textContent = `Ticket #${id}`;
+  document.getElementById("modalTitle").textContent = `Ticket #${formatTicketId(id)}`;
   document.getElementById("mReq").textContent = t.Title || "";
   document.getElementById("mEmail").textContent = t[FIELDS.email] || "";
   document.getElementById("mCreated").textContent = formatDate(t[FIELDS.receivedOn]);
@@ -1118,7 +1210,7 @@ function openModal(id){
   document.getElementById("mNoNotify").checked = false;
   document.getElementById("noNotifyRow").style.display = (t[FIELDS.status] === "Completed") ? "grid" : "none";
   document.getElementById("mergePanel").style.display = "none";
-  document.getElementById("mergeSourceId").textContent = id;
+  document.getElementById("mergeSourceId").textContent = formatTicketId(id);
   populateMergeTargets(id);
   const metaRow = document.getElementById("completedMetaRow");
   if(t[FIELDS.completed]){
@@ -1146,7 +1238,7 @@ function populateMergeTargets(excludeId){
     .forEach(t => {
       const opt = document.createElement("option");
       opt.value = t.Id;
-      opt.textContent = `#${t.Id} — ${t.Title || "(no subject)"} — ${t[FIELDS.email] || ""}`;
+      opt.textContent = `#${formatTicketId(t.Id)} — ${t.Title || "(no subject)"} — ${t[FIELDS.email] || ""}`;
       select.appendChild(opt);
     });
 }
@@ -1169,6 +1261,143 @@ async function patchTicket(digest, id, body){
   );
   if(!res.ok){
     throw new Error(await res.text());
+  }
+}
+
+function openManualEntryModal(){
+  document.getElementById("meMethodPhone").checked = true;
+  document.getElementById("meRequesterName").value = "";
+  document.getElementById("mePhoneNumber").value = "";
+  document.getElementById("meEmail").value = "";
+  document.getElementById("meTitle").value = "";
+  document.getElementById("meDescription").value = "";
+  document.getElementById("meStatus").value = "New";
+  document.getElementById("meInternal").value = "";
+  document.getElementById("meCustomerNote").value = "";
+  document.getElementById("meNoNotify").checked = true;
+  document.getElementById("meCustomerNoteRow").style.display = "none";
+  document.getElementById("meNoNotifyRow").style.display = "none";
+  document.getElementById("meSaveMsg").textContent = "";
+  updateManualEntryMethodFields();
+  document.getElementById("manualEntryOverlay").classList.add("active");
+}
+
+function closeManualEntryModal(){
+  document.getElementById("manualEntryOverlay").classList.remove("active");
+}
+
+function updateManualEntryMethodFields(){
+  const isPhone = document.getElementById("meMethodPhone").checked;
+  document.getElementById("mePhoneRow").style.display = isPhone ? "grid" : "none";
+  document.getElementById("meEmailRow").style.display = isPhone ? "none" : "grid";
+}
+
+async function createManualEntry(){
+  const isPhone = document.getElementById("meMethodPhone").checked;
+  const requesterName = document.getElementById("meRequesterName").value.trim();
+  const phone = document.getElementById("mePhoneNumber").value.trim();
+  const email = document.getElementById("meEmail").value.trim();
+  const title = document.getElementById("meTitle").value.trim();
+  const description = document.getElementById("meDescription").value.trim();
+  const status = document.getElementById("meStatus").value;
+  const internalNotes = document.getElementById("meInternal").value;
+  const customerNote = document.getElementById("meCustomerNote").value;
+  const noNotify = document.getElementById("meNoNotify").checked;
+
+  if(!requesterName || !title || !description){
+    alert("Requestor Name, Problem Title, and Description are required.");
+    return;
+  }
+  if(isPhone && !phone){
+    alert("Enter a phone number, or switch Support Method to Email.");
+    return;
+  }
+  if(!isPhone && !email){
+    alert("Enter an email address, or switch Support Method to Phone.");
+    return;
+  }
+
+  const saveBtn = document.getElementById("meSaveBtn");
+  const saveMsg = document.getElementById("meSaveMsg");
+  saveBtn.disabled = true;
+  saveMsg.className = "save-msg";
+  saveMsg.textContent = "Creating...";
+
+  const now = new Date().toISOString();
+  const body = {
+    Title: title,
+    [FIELDS.problem]: description,
+    [FIELDS.email]: email,
+    [FIELDS.receivedOn]: now,
+    [FIELDS.status]: status,
+    [FIELDS.internalNotes]: internalNotes,
+    [FIELDS.customerNote]: customerNote,
+    [FIELDS.entryType]: "Manual",
+    [FIELDS.source]: isPhone ? "Phone" : "Email",
+    [FIELDS.requesterName]: requesterName,
+    [FIELDS.phoneNumber]: phone
+  };
+  if(status === "Completed"){
+    body[FIELDS.completed] = true;
+    body[FIELDS.completedOn] = now;
+    body[FIELDS.completedBy] = currentUser.name;
+    if(noNotify) body[FIELDS.customerNotified] = true;
+  } else {
+    body[FIELDS.completed] = false;
+  }
+
+  try{
+    const digestRes = await fetch(`${CONFIG.siteUrl}/_api/contextinfo`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${spToken}`, Accept: "application/json;odata=nometadata" }
+    });
+    const digest = (await digestRes.json()).FormDigestValue;
+
+    const createRes = await fetch(
+      `${CONFIG.siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.listTitle)}')/items`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${spToken}`,
+          Accept: "application/json;odata=nometadata",
+          "Content-Type": "application/json;odata=nometadata",
+          "X-RequestDigest": digest
+        },
+        body: JSON.stringify(body)
+      }
+    );
+    if(!createRes.ok){
+      console.error(await createRes.text());
+      saveMsg.className = "save-msg err";
+      saveMsg.textContent = "Failed to create ticket — see console.";
+      saveBtn.disabled = false;
+      return;
+    }
+    const created = await createRes.json();
+
+    await postAuditEntry(digest, {
+      Title: `Ticket #M${created.Id}`,
+      [AUDIT_FIELDS.ticketId]: created.Id,
+      [AUDIT_FIELDS.staffMember]: currentUser.name,
+      [AUDIT_FIELDS.logTime]: now,
+      [AUDIT_FIELDS.action]: `Manual ticket created (${isPhone ? "Phone" : "Email"})${status === "Completed" ? " and closed" : ""}`,
+      [AUDIT_FIELDS.previousStatus]: "",
+      [AUDIT_FIELDS.newStatus]: status,
+      [AUDIT_FIELDS.internalNotesSnapshot]: internalNotes,
+      [AUDIT_FIELDS.customerNoteSnapshot]: customerNote
+    });
+
+    await loadTickets();
+    await loadAuditLog();
+    saveMsg.className = "save-msg ok";
+    saveMsg.textContent = "Created.";
+    setTimeout(closeManualEntryModal, 600);
+  }catch(err){
+    console.error(err);
+    saveMsg.className = "save-msg err";
+    saveMsg.textContent = "Failed to create ticket — see console.";
+  }finally{
+    saveBtn.disabled = false;
   }
 }
 
@@ -1195,11 +1424,11 @@ async function mergeIntoTicket(){
     const now = new Date().toISOString();
     const staff = currentUser.name;
 
-    const mergeNoteForTarget = `${target[FIELDS.internalNotes] ? target[FIELDS.internalNotes] + "\n\n" : ""}--- Merged from Ticket #${source.Id} (${source.Title || "no subject"}) by ${staff} on ${formatDate(now)} ---\n${cleanEmailText(source[FIELDS.problem] || "")}`;
+    const mergeNoteForTarget = `${target[FIELDS.internalNotes] ? target[FIELDS.internalNotes] + "\n\n" : ""}--- Merged from Ticket #${formatTicketId(source.Id)} (${source.Title || "no subject"}) by ${staff} on ${formatDate(now)} ---\n${cleanEmailText(source[FIELDS.problem] || "")}`;
 
     await patchTicket(digest, target.Id, { [FIELDS.internalNotes]: mergeNoteForTarget });
 
-    const mergeNoteForSource = `${source[FIELDS.internalNotes] ? source[FIELDS.internalNotes] + "\n\n" : ""}Merged into Ticket #${target.Id} by ${staff} on ${formatDate(now)}.`;
+    const mergeNoteForSource = `${source[FIELDS.internalNotes] ? source[FIELDS.internalNotes] + "\n\n" : ""}Merged into Ticket #${formatTicketId(target.Id)} by ${staff} on ${formatDate(now)}.`;
     await patchTicket(digest, source.Id, {
       [FIELDS.status]: "Merged",
       [FIELDS.completed]: true,
@@ -1210,22 +1439,22 @@ async function mergeIntoTicket(){
     });
 
     await postAuditEntry(digest, {
-      Title: `Ticket #${source.Id}`,
+      Title: `Ticket #${formatTicketId(source.Id)}`,
       [AUDIT_FIELDS.ticketId]: source.Id,
       [AUDIT_FIELDS.staffMember]: staff,
       [AUDIT_FIELDS.logTime]: now,
-      [AUDIT_FIELDS.action]: `Merged into Ticket #${target.Id} (no customer email sent)`,
+      [AUDIT_FIELDS.action]: `Merged into Ticket #${formatTicketId(target.Id)} (no customer email sent)`,
       [AUDIT_FIELDS.previousStatus]: originalSnapshot ? originalSnapshot.status : "",
       [AUDIT_FIELDS.newStatus]: "Merged",
       [AUDIT_FIELDS.internalNotesSnapshot]: mergeNoteForSource,
       [AUDIT_FIELDS.customerNoteSnapshot]: source[FIELDS.customerNote] || ""
     });
     await postAuditEntry(digest, {
-      Title: `Ticket #${target.Id}`,
+      Title: `Ticket #${formatTicketId(target.Id)}`,
       [AUDIT_FIELDS.ticketId]: target.Id,
       [AUDIT_FIELDS.staffMember]: staff,
       [AUDIT_FIELDS.logTime]: now,
-      [AUDIT_FIELDS.action]: `Received merged content from Ticket #${source.Id}`,
+      [AUDIT_FIELDS.action]: `Received merged content from Ticket #${formatTicketId(source.Id)}`,
       [AUDIT_FIELDS.previousStatus]: target[FIELDS.status] || "New",
       [AUDIT_FIELDS.newStatus]: target[FIELDS.status] || "New",
       [AUDIT_FIELDS.internalNotesSnapshot]: mergeNoteForTarget,
@@ -1378,12 +1607,16 @@ function renderDashboard(){
 
 function exportCsv(){
   const list = getFiltered();
-  const headers = ["ID","Received","Requester","Email","Problem","Status","Internal Notes","Customer Note","Completed On","Completed By"];
+  const headers = ["ID","Entry Type","Source","Received","Requester Name","Title","Email","Phone Number","Problem","Status","Internal Notes","Customer Note","Completed On","Completed By"];
   const rows = list.map(t => [
-    t.Id,
+    formatTicketId(t.Id),
+    t[FIELDS.entryType] || "Automated",
+    t[FIELDS.source] || "Email",
     formatDate(t[FIELDS.receivedOn]),
+    t[FIELDS.requesterName] || "",
     t.Title || "",
     t[FIELDS.email] || "",
+    t[FIELDS.phoneNumber] || "",
     t[FIELDS.problem] || "",
     t[FIELDS.status] || "New",
     t[FIELDS.internalNotes] || "",
@@ -1406,6 +1639,11 @@ function formatDate(d){
   const dt = new Date(d);
   return dt.toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }) +
     " " + dt.toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit" });
+}
+
+function formatTicketId(id){
+  const t = allTickets.find(x => x.Id === id);
+  return (t && t[FIELDS.entryType] === "Manual") ? `M${id}` : `${id}`;
 }
 
 function escapeHtml(str){
