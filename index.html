@@ -301,10 +301,17 @@
   <button id="signInBtn">Sign In</button>
 </div>
 
+<div id="notAuthorizedScreen" style="display:none;flex-direction:column;align-items:center;justify-content:center;height:80vh;gap:12px;text-align:center;padding:0 20px;">
+  <h2 style="margin:0;color:var(--navy);">Access Not Available</h2>
+  <p style="color:var(--muted);font-size:14px;max-width:420px;">Your account isn't on the Secondary Employment support roster. Contact Jared Nielsen if you believe you should have access.</p>
+  <button id="notAuthSignOutBtn" class="btn btn-secondary" style="margin-top:6px;">Sign Out</button>
+</div>
+
 <main id="mainApp">
   <div class="tabs">
     <div class="tab active" data-view="ticketsView">Tickets</div>
     <div class="tab" data-view="dashView">Activity &amp; Reports</div>
+    <div class="tab" data-view="auditView">Audit Log</div>
   </div>
 
   <!-- TICKETS VIEW -->
@@ -348,6 +355,31 @@
       <button class="btn btn-primary" id="exportCsvBtn">Download CSV Report</button>
     </div>
   </div>
+
+  <!-- AUDIT LOG VIEW -->
+  <div class="view" id="auditView">
+    <div class="toolbar">
+      <input type="text" id="auditSearchBox" placeholder="Search ticket #, staff member...">
+      <div class="stat-pills" id="auditPills"></div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Ticket #</th>
+          <th>Staff Member</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="auditBody"></tbody>
+    </table>
+    <div id="auditEmptyState" style="display:none;text-align:center;padding:60px 20px;color:var(--muted);">No audit entries match your search.</div>
+    <div class="dash-section" style="margin-top:20px;">
+      <h3>Export</h3>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">Download the full audit trail, including note snapshots.</p>
+      <button class="btn btn-primary" id="exportAuditCsvBtn">Download Audit CSV</button>
+    </div>
+  </div>
 </main>
 
 <!-- TICKET MODAL -->
@@ -363,12 +395,34 @@
       <div class="field-row"><label>Received</label><div class="val" id="mCreated"></div></div>
       <div class="field-row"><label>Problem</label><div class="val" id="mProblem"></div></div>
       <div class="field-row">
+        <label></label>
+        <div>
+          <a href="#" id="toggleMergeLink" style="font-size:12px;color:var(--red);font-weight:600;">Is this a duplicate/reply? Merge into another ticket instead...</a>
+          <div id="mergePanel" style="display:none;margin-top:10px;padding:14px;background:#FAFAFB;border:1px solid var(--border);border-radius:6px;">
+            <select id="mergeTargetSelect" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;margin-bottom:8px;">
+              <option value="">Select the original ticket...</option>
+            </select>
+            <div class="hint" style="margin-bottom:10px;">This closes the current ticket (#<span id="mergeSourceId"></span>) without emailing the customer, and copies its Problem text into the selected ticket's Internal Notes so the context isn't lost.</div>
+            <button type="button" class="btn btn-primary" id="mergeBtn" style="background:var(--navy);">Merge &amp; Close This Ticket</button>
+          </div>
+        </div>
+      </div>
+      <div class="field-row">
         <label>Status</label>
         <select id="mStatus">
           <option value="New">New</option>
           <option value="In Progress">In Progress</option>
           <option value="Completed">Completed</option>
         </select>
+      </div>
+      <div class="field-row" id="noNotifyRow" style="display:none;">
+        <label></label>
+        <div>
+          <label style="font-weight:400;display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="mNoNotify"> Close without emailing the customer
+          </label>
+          <div class="hint">Use this if the customer already replied (e.g. said thanks) and doesn't need another email.</div>
+        </div>
       </div>
       <div class="field-row">
         <label>Internal Notes</label>
@@ -405,7 +459,9 @@ const CONFIG = {
   tenantId: "2935709e-c10c-4809-a302-852d369f8700",
   redirectUri: "https://jarednielsen1.github.io/dpd-secondary-employment-portal/",
   siteUrl: "https://dallastxgov.sharepoint.com/sites/PDPersonnelUnit",
-  listTitle: "Secondary Employment Requests"
+  listTitle: "Secondary Employment Requests",
+  auditListTitle: "Secondary Employment Audit Log",
+  staffListTitle: "Support Staff"
 };
 
 // Map of logical field -> SharePoint internal column name.
@@ -422,6 +478,17 @@ const FIELDS = {
   status: "Status",
   customerNotified: "CustomerNotified",
   receivedOn: "ReceivedOn"
+};
+
+const AUDIT_FIELDS = {
+  ticketId: "TicketId",
+  staffMember: "StaffMember",
+  logTime: "LogTime",
+  action: "Action",
+  previousStatus: "PreviousStatus",
+  newStatus: "NewStatus",
+  internalNotesSnapshot: "InternalNotesSnapshot",
+  customerNoteSnapshot: "CustomerNoteSnapshot"
 };
 
 const msalConfig = {
@@ -444,7 +511,9 @@ try{
 let currentUser = null;
 let spToken = null;
 let allTickets = [];
+let allAuditEntries = [];
 let currentTicketId = null;
+let originalSnapshot = null;
 
 document.getElementById("signInBtn").addEventListener("click", signIn);
 document.getElementById("modalClose").addEventListener("click", closeModal);
@@ -453,8 +522,42 @@ document.getElementById("saveBtn").addEventListener("click", saveTicket);
 document.getElementById("filterStatus").addEventListener("change", renderTickets);
 document.getElementById("searchBox").addEventListener("input", renderTickets);
 document.getElementById("exportCsvBtn").addEventListener("click", exportCsv);
+document.getElementById("auditSearchBox").addEventListener("input", renderAuditLog);
+document.getElementById("exportAuditCsvBtn").addEventListener("click", exportAuditCsv);
+document.getElementById("mStatus").addEventListener("change", () => {
+  document.getElementById("noNotifyRow").style.display =
+    (document.getElementById("mStatus").value === "Completed") ? "grid" : "none";
+});
+document.getElementById("toggleMergeLink").addEventListener("click", (e) => {
+  e.preventDefault();
+  const panel = document.getElementById("mergePanel");
+  panel.style.display = panel.style.display === "none" ? "block" : "none";
+});
+document.getElementById("mergeBtn").addEventListener("click", mergeIntoTicket);
 document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => switchTab(t.dataset.view)));
 document.querySelectorAll("th[data-sort]").forEach(th => th.addEventListener("click", () => sortBy(th.dataset.sort)));
+
+async function checkAuthorized(username){
+  try{
+    const url = `${CONFIG.siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.staffListTitle)}')/items?$top=500&$select=Title`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${spToken}`, Accept: "application/json;odata=nometadata" }
+    });
+    if(!res.ok){
+      console.error("Support Staff lookup failed:", await res.text());
+      return false;
+    }
+    const data = await res.json();
+    const myLocalPart = (username || "").split("@")[0].toLowerCase();
+    return data.value.some(item => {
+      const rosterLocalPart = (item.Title || "").split("@")[0].toLowerCase();
+      return rosterLocalPart === myLocalPart && myLocalPart !== "";
+    });
+  }catch(err){
+    console.error("Authorization check failed:", err);
+    return false;
+  }
+}
 
 async function signIn(){
   if(!msalInstance){
@@ -476,12 +579,22 @@ async function signIn(){
       name: graphResult.account.name,
       username: graphResult.account.username
     };
+
+    const authorized = await checkAuthorized(currentUser.username);
+    if(!authorized){
+      document.getElementById("signInScreen").style.display = "none";
+      document.getElementById("notAuthorizedScreen").style.display = "flex";
+      document.getElementById("notAuthSignOutBtn").addEventListener("click", () => msalInstance.logoutPopup());
+      return;
+    }
+
     document.getElementById("signInScreen").style.display = "none";
     document.getElementById("mainApp").style.display = "block";
     document.getElementById("userBox").innerHTML =
       `${currentUser.name}<br><button id="signOutBtn">Sign Out</button>`;
     document.getElementById("signOutBtn").addEventListener("click", () => msalInstance.logoutPopup());
     await loadTickets();
+    await loadAuditLog();
   }catch(err){
     console.error(err);
     alert("Sign-in failed. Check the console for details.");
@@ -507,10 +620,91 @@ async function loadTickets(){
   renderDashboard();
 }
 
+async function loadAuditLog(){
+  const url = `${CONFIG.siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.auditListTitle)}')/items?$top=5000&$orderby=Id desc`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${spToken}`,
+      Accept: "application/json;odata=nometadata"
+    }
+  });
+  if(!res.ok){
+    console.error(await res.text());
+    return; // don't block the whole app if the audit list isn't set up yet
+  }
+  const data = await res.json();
+  allAuditEntries = data.value;
+  renderAuditLog();
+}
+
+function renderAuditLog(){
+  const search = document.getElementById("auditSearchBox").value.toLowerCase();
+  const list = allAuditEntries.filter(e => {
+    if(!search) return true;
+    const hay = `${e[AUDIT_FIELDS.ticketId]||""} ${e[AUDIT_FIELDS.staffMember]||""} ${e[AUDIT_FIELDS.action]||""}`.toLowerCase();
+    return hay.includes(search);
+  });
+  const body = document.getElementById("auditBody");
+  body.innerHTML = "";
+  document.getElementById("auditEmptyState").style.display = list.length ? "none" : "block";
+  list.forEach(e => {
+    const tr = document.createElement("tr");
+    tr.style.cursor = "default";
+    tr.innerHTML = `
+      <td>${formatDate(e[AUDIT_FIELDS.logTime])}</td>
+      <td>#${e[AUDIT_FIELDS.ticketId] ?? ""}</td>
+      <td>${escapeHtml(e[AUDIT_FIELDS.staffMember] || "")}</td>
+      <td>${escapeHtml(e[AUDIT_FIELDS.action] || "")}</td>
+    `;
+    body.appendChild(tr);
+  });
+  document.getElementById("auditPills").innerHTML = `<div class="pill"><b>${allAuditEntries.length}</b> Total Entries</div>`;
+}
+
+function exportAuditCsv(){
+  const headers = ["Time","Ticket #","Staff Member","Action","Previous Status","New Status","Internal Notes Snapshot","Customer Note Snapshot"];
+  const rows = allAuditEntries.map(e => [
+    formatDate(e[AUDIT_FIELDS.logTime]),
+    e[AUDIT_FIELDS.ticketId] ?? "",
+    e[AUDIT_FIELDS.staffMember] || "",
+    e[AUDIT_FIELDS.action] || "",
+    e[AUDIT_FIELDS.previousStatus] || "",
+    e[AUDIT_FIELDS.newStatus] || "",
+    e[AUDIT_FIELDS.internalNotesSnapshot] || "",
+    e[AUDIT_FIELDS.customerNoteSnapshot] || ""
+  ]);
+  const csv = [headers, ...rows]
+    .map(row => row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `secondary-employment-audit-log-${new Date().toISOString().slice(0,10)}.csv`;
+  link.click();
+}
+
+async function postAuditEntry(digest, entry){
+  const url = `${CONFIG.siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.auditListTitle)}')/items`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${spToken}`,
+      Accept: "application/json;odata=nometadata",
+      "Content-Type": "application/json;odata=nometadata",
+      "X-RequestDigest": digest
+    },
+    body: JSON.stringify(entry)
+  });
+  if(!res.ok){
+    console.error("Audit log entry failed to save:", await res.text());
+  }
+}
+
 function switchTab(viewId){
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.view === viewId));
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === viewId));
   if(viewId === "dashView") renderDashboard();
+  if(viewId === "auditView") renderAuditLog();
 }
 
 let sortField = "Id", sortDir = -1;
@@ -575,6 +769,11 @@ function openModal(id){
   const t = allTickets.find(x => x.Id === id);
   if(!t) return;
   currentTicketId = id;
+  originalSnapshot = {
+    status: t[FIELDS.status] || "New",
+    internalNotes: t[FIELDS.internalNotes] || "",
+    customerNote: t[FIELDS.customerNote] || ""
+  };
   document.getElementById("modalTitle").textContent = `Ticket #${id}`;
   document.getElementById("mReq").textContent = t.Title || "";
   document.getElementById("mEmail").textContent = t[FIELDS.email] || "";
@@ -583,6 +782,11 @@ function openModal(id){
   document.getElementById("mStatus").value = t[FIELDS.status] || "New";
   document.getElementById("mInternal").value = t[FIELDS.internalNotes] || "";
   document.getElementById("mCustomer").value = t[FIELDS.customerNote] || "";
+  document.getElementById("mNoNotify").checked = false;
+  document.getElementById("noNotifyRow").style.display = (t[FIELDS.status] === "Completed") ? "grid" : "none";
+  document.getElementById("mergePanel").style.display = "none";
+  document.getElementById("mergeSourceId").textContent = id;
+  populateMergeTargets(id);
   const metaRow = document.getElementById("completedMetaRow");
   if(t[FIELDS.completed]){
     metaRow.style.display = "grid";
@@ -598,6 +802,113 @@ function openModal(id){
 function closeModal(){
   document.getElementById("modalOverlay").classList.remove("active");
   currentTicketId = null;
+}
+
+function populateMergeTargets(excludeId){
+  const select = document.getElementById("mergeTargetSelect");
+  select.innerHTML = '<option value="">Select the original ticket...</option>';
+  allTickets
+    .filter(t => t.Id !== excludeId)
+    .sort((a,b) => b.Id - a.Id)
+    .forEach(t => {
+      const opt = document.createElement("option");
+      opt.value = t.Id;
+      opt.textContent = `#${t.Id} — ${t.Title || "(no subject)"} — ${t[FIELDS.email] || ""}`;
+      select.appendChild(opt);
+    });
+}
+
+async function patchTicket(digest, id, body){
+  const res = await fetch(
+    `${CONFIG.siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.listTitle)}')/items(${id})`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${spToken}`,
+        Accept: "application/json;odata=nometadata",
+        "Content-Type": "application/json;odata=nometadata",
+        "X-RequestDigest": digest,
+        "IF-MATCH": "*",
+        "X-HTTP-Method": "MERGE"
+      },
+      body: JSON.stringify(body)
+    }
+  );
+  if(!res.ok){
+    throw new Error(await res.text());
+  }
+}
+
+async function mergeIntoTicket(){
+  const targetId = parseInt(document.getElementById("mergeTargetSelect").value, 10);
+  if(!targetId){
+    alert("Select the original ticket to merge into.");
+    return;
+  }
+  const target = allTickets.find(x => x.Id === targetId);
+  const source = allTickets.find(x => x.Id === currentTicketId);
+  if(!target || !source) return;
+
+  const mergeBtn = document.getElementById("mergeBtn");
+  mergeBtn.disabled = true;
+  mergeBtn.textContent = "Merging...";
+
+  try{
+    const digestRes = await fetch(`${CONFIG.siteUrl}/_api/contextinfo`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${spToken}`, Accept: "application/json;odata=nometadata" }
+    });
+    const digest = (await digestRes.json()).FormDigestValue;
+    const now = new Date().toISOString();
+    const staff = currentUser.name;
+
+    const mergeNoteForTarget = `${target[FIELDS.internalNotes] ? target[FIELDS.internalNotes] + "\n\n" : ""}--- Merged from Ticket #${source.Id} (${source.Title || "no subject"}) by ${staff} on ${formatDate(now)} ---\n${cleanEmailText(source[FIELDS.problem] || "")}`;
+
+    await patchTicket(digest, target.Id, { [FIELDS.internalNotes]: mergeNoteForTarget });
+
+    const mergeNoteForSource = `${source[FIELDS.internalNotes] ? source[FIELDS.internalNotes] + "\n\n" : ""}Merged into Ticket #${target.Id} by ${staff} on ${formatDate(now)}.`;
+    await patchTicket(digest, source.Id, {
+      [FIELDS.status]: "Completed",
+      [FIELDS.completed]: true,
+      [FIELDS.completedOn]: now,
+      [FIELDS.completedBy]: staff,
+      [FIELDS.customerNotified]: true, // prevents the completion email from firing for the duplicate
+      [FIELDS.internalNotes]: mergeNoteForSource
+    });
+
+    await postAuditEntry(digest, {
+      Title: `Ticket #${source.Id}`,
+      [AUDIT_FIELDS.ticketId]: source.Id,
+      [AUDIT_FIELDS.staffMember]: staff,
+      [AUDIT_FIELDS.logTime]: now,
+      [AUDIT_FIELDS.action]: `Merged into Ticket #${target.Id} (no customer email sent)`,
+      [AUDIT_FIELDS.previousStatus]: originalSnapshot ? originalSnapshot.status : "",
+      [AUDIT_FIELDS.newStatus]: "Completed",
+      [AUDIT_FIELDS.internalNotesSnapshot]: mergeNoteForSource,
+      [AUDIT_FIELDS.customerNoteSnapshot]: source[FIELDS.customerNote] || ""
+    });
+    await postAuditEntry(digest, {
+      Title: `Ticket #${target.Id}`,
+      [AUDIT_FIELDS.ticketId]: target.Id,
+      [AUDIT_FIELDS.staffMember]: staff,
+      [AUDIT_FIELDS.logTime]: now,
+      [AUDIT_FIELDS.action]: `Received merged content from Ticket #${source.Id}`,
+      [AUDIT_FIELDS.previousStatus]: target[FIELDS.status] || "New",
+      [AUDIT_FIELDS.newStatus]: target[FIELDS.status] || "New",
+      [AUDIT_FIELDS.internalNotesSnapshot]: mergeNoteForTarget,
+      [AUDIT_FIELDS.customerNoteSnapshot]: target[FIELDS.customerNote] || ""
+    });
+
+    await loadTickets();
+    await loadAuditLog();
+    closeModal();
+  }catch(err){
+    console.error(err);
+    alert("Merge failed — see console.");
+  }finally{
+    mergeBtn.disabled = false;
+    mergeBtn.textContent = "Merge & Close This Ticket";
+  }
 }
 
 async function saveTicket(){
@@ -618,6 +929,9 @@ async function saveTicket(){
     body[FIELDS.completed] = true;
     body[FIELDS.completedOn] = new Date().toISOString();
     body[FIELDS.completedBy] = currentUser.name;
+    if(document.getElementById("mNoNotify").checked){
+      body[FIELDS.customerNotified] = true; // skip the completion email
+    }
   } else {
     body[FIELDS.completed] = false;
   }
@@ -657,6 +971,30 @@ async function saveTicket(){
 
     saveMsg.className = "save-msg ok";
     saveMsg.textContent = "Saved.";
+
+    const newInternal = document.getElementById("mInternal").value;
+    const newCustomer = document.getElementById("mCustomer").value;
+    const changes = [];
+    if(originalSnapshot.status !== newStatus) changes.push(`Status: ${originalSnapshot.status} → ${newStatus}`);
+    if(originalSnapshot.internalNotes !== newInternal) changes.push("Internal Notes updated");
+    if(originalSnapshot.customerNote !== newCustomer) changes.push("Customer Note updated");
+    if(newStatus === "Completed" && document.getElementById("mNoNotify").checked) changes.push("Closed without customer email");
+
+    if(changes.length){
+      await postAuditEntry(digest, {
+        Title: `Ticket #${currentTicketId}`,
+        [AUDIT_FIELDS.ticketId]: currentTicketId,
+        [AUDIT_FIELDS.staffMember]: currentUser.name,
+        [AUDIT_FIELDS.logTime]: new Date().toISOString(),
+        [AUDIT_FIELDS.action]: changes.join("; "),
+        [AUDIT_FIELDS.previousStatus]: originalSnapshot.status,
+        [AUDIT_FIELDS.newStatus]: newStatus,
+        [AUDIT_FIELDS.internalNotesSnapshot]: newInternal,
+        [AUDIT_FIELDS.customerNoteSnapshot]: newCustomer
+      });
+      await loadAuditLog();
+    }
+
     await loadTickets();
     setTimeout(closeModal, 600);
   }catch(err){
