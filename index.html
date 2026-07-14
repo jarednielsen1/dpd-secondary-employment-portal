@@ -222,7 +222,12 @@
   }
   .field-row label{color:var(--muted);font-weight:600;padding-top:6px;}
   .field-row .val{padding-top:6px;}
-  #mProblem{white-space:pre-wrap;word-break:break-word;line-height:1.5;}
+  #mProblem{
+    white-space:pre-wrap;word-break:break-word;line-height:1.5;
+    max-height:180px;overflow-y:auto;
+    border:1px solid var(--border);border-radius:6px;
+    padding:10px 12px;background:#FAFBFC;
+  }
   #mProblem a{color:var(--red);}
   .field-row textarea, .field-row select{
     width:100%;
