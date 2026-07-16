@@ -531,12 +531,15 @@
     <div class="modal-body">
       <div class="field-row">
         <label>Support Method</label>
-        <div style="display:flex;gap:18px;padding-top:6px;">
+        <div style="display:flex;gap:18px;padding-top:6px;flex-wrap:wrap;">
           <label style="font-weight:400;display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
             <input type="radio" name="meMethod" id="meMethodPhone" value="Phone" checked> Phone
           </label>
           <label style="font-weight:400;display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
             <input type="radio" name="meMethod" id="meMethodEmail" value="Email"> Email
+          </label>
+          <label style="font-weight:400;display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+            <input type="radio" name="meMethod" id="meMethodWalkin" value="Walk-in"> Walk-in
           </label>
         </div>
       </div>
@@ -736,6 +739,7 @@ document.getElementById("meCancelBtn").addEventListener("click", closeManualEntr
 document.getElementById("meSaveBtn").addEventListener("click", createManualEntry);
 document.getElementById("meMethodPhone").addEventListener("change", updateManualEntryMethodFields);
 document.getElementById("meMethodEmail").addEventListener("change", updateManualEntryMethodFields);
+document.getElementById("meMethodWalkin").addEventListener("change", updateManualEntryMethodFields);
 document.getElementById("meStatus").addEventListener("change", () => {
   const isCompleted = document.getElementById("meStatus").value === "Completed";
   document.getElementById("meCustomerNoteRow").style.display = isCompleted ? "grid" : "none";
@@ -1292,8 +1296,15 @@ function updateManualEntryMethodFields(){
   document.getElementById("meEmailRow").style.display = isPhone ? "none" : "grid";
 }
 
+function getSelectedMethod(){
+  const radios = document.getElementsByName("meMethod");
+  for(const r of radios){ if(r.checked) return r.value; }
+  return "Phone";
+}
+
 async function createManualEntry(){
-  const isPhone = document.getElementById("meMethodPhone").checked;
+  const method = getSelectedMethod(); // "Phone", "Email", or "Walk-in"
+  const isPhone = method === "Phone";
   const requesterName = document.getElementById("meRequesterName").value.trim();
   const phone = document.getElementById("mePhoneNumber").value.trim();
   const email = document.getElementById("meEmail").value.trim();
@@ -1309,11 +1320,11 @@ async function createManualEntry(){
     return;
   }
   if(isPhone && !phone){
-    alert("Enter a phone number, or switch Support Method to Email.");
+    alert("Enter a phone number, or switch Support Method to Email or Walk-in.");
     return;
   }
   if(!isPhone && !email){
-    alert("Enter an email address, or switch Support Method to Phone.");
+    alert(`Enter an email address for this ${method.toLowerCase()} contact.`);
     return;
   }
 
@@ -1333,7 +1344,7 @@ async function createManualEntry(){
     [FIELDS.internalNotes]: internalNotes,
     [FIELDS.customerNote]: customerNote,
     [FIELDS.entryType]: "Manual",
-    [FIELDS.source]: isPhone ? "Phone" : "Email",
+    [FIELDS.source]: method,
     [FIELDS.requesterName]: requesterName,
     [FIELDS.phoneNumber]: phone
   };
@@ -1380,7 +1391,7 @@ async function createManualEntry(){
       [AUDIT_FIELDS.ticketId]: created.Id,
       [AUDIT_FIELDS.staffMember]: currentUser.name,
       [AUDIT_FIELDS.logTime]: now,
-      [AUDIT_FIELDS.action]: `Manual ticket created (${isPhone ? "Phone" : "Email"})${status === "Completed" ? " and closed" : ""}`,
+      [AUDIT_FIELDS.action]: `Manual ticket created (${method})${status === "Completed" ? " and closed" : ""}`,
       [AUDIT_FIELDS.previousStatus]: "",
       [AUDIT_FIELDS.newStatus]: status,
       [AUDIT_FIELDS.internalNotesSnapshot]: internalNotes,
