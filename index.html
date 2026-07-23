@@ -465,7 +465,16 @@
       <div class="field-row"><label>Title</label><div class="val" id="mReq"></div></div>
       <div class="field-row"><label>Email</label><div class="val" id="mEmail"></div></div>
       <div class="field-row"><label>Received</label><div class="val" id="mCreated"></div></div>
-      <div class="field-row"><label>Problem</label><div class="val" id="mProblem"></div></div>
+      <div class="field-row">
+        <label>Problem
+          <button type="button" id="problemLockBtn" title="Unlock to trim (not for adding notes)" style="background:none;border:none;cursor:pointer;font-size:15px;padding:0;margin-left:2px;vertical-align:middle;">🔒</button>
+        </label>
+        <div>
+          <div class="val" id="mProblem"></div>
+          <textarea id="mProblemEdit" style="display:none;width:100%;min-height:180px;white-space:pre-wrap;line-height:1.5;padding:10px 12px;border:1px solid var(--gold);border-radius:6px;font-family:inherit;font-size:13px;background:#FFFDF5;"></textarea>
+          <div class="hint" id="problemEditHint" style="display:none;color:var(--red);">Unlocked for trimming only — please don't add new information here; use Internal Notes or Customer Note instead. Re-locks automatically when you save.</div>
+        </div>
+      </div>
       <div class="field-row">
         <label></label>
         <div>
@@ -732,6 +741,9 @@ document.getElementById("toggleMergeLink").addEventListener("click", (e) => {
   panel.style.display = panel.style.display === "none" ? "block" : "none";
 });
 document.getElementById("mergeBtn").addEventListener("click", mergeIntoTicket);
+document.getElementById("problemLockBtn").addEventListener("click", () => {
+  if(problemUnlocked) lockProblemField(); else unlockProblemField();
+});
 
 document.getElementById("openManualEntryBtn").addEventListener("click", openManualEntryModal);
 document.getElementById("manualEntryClose").addEventListener("click", closeManualEntryModal);
@@ -1201,13 +1213,16 @@ function openModal(id){
   originalSnapshot = {
     status: t[FIELDS.status] || "New",
     internalNotes: t[FIELDS.internalNotes] || "",
-    customerNote: t[FIELDS.customerNote] || ""
+    customerNote: t[FIELDS.customerNote] || "",
+    problem: cleanEmailText(t[FIELDS.problem] || "")
   };
   document.getElementById("modalTitle").textContent = `Ticket #${formatTicketId(id)}`;
   document.getElementById("mReq").textContent = t.Title || "";
   document.getElementById("mEmail").textContent = t[FIELDS.email] || "";
   document.getElementById("mCreated").textContent = formatDate(t[FIELDS.receivedOn]);
   document.getElementById("mProblem").innerHTML = formatProblemHtml(t[FIELDS.problem]);
+  document.getElementById("mProblemEdit").value = originalSnapshot.problem;
+  lockProblemField();
   document.getElementById("mStatus").value = t[FIELDS.status] || "New";
   document.getElementById("mInternal").value = t[FIELDS.internalNotes] || "";
   document.getElementById("mCustomer").value = t[FIELDS.customerNote] || "";
@@ -1231,6 +1246,7 @@ function openModal(id){
 function closeModal(){
   document.getElementById("modalOverlay").classList.remove("active");
   currentTicketId = null;
+  lockProblemField();
 }
 
 function populateMergeTargets(excludeId){
@@ -1497,6 +1513,9 @@ async function saveTicket(){
     [FIELDS.internalNotes]: document.getElementById("mInternal").value,
     [FIELDS.customerNote]: document.getElementById("mCustomer").value
   };
+  if(problemUnlocked){
+    body[FIELDS.problem] = document.getElementById("mProblemEdit").value;
+  }
 
   if(newStatus === "Completed"){
     body[FIELDS.completed] = true;
@@ -1551,6 +1570,7 @@ async function saveTicket(){
     if(originalSnapshot.status !== newStatus) changes.push(`Status: ${originalSnapshot.status} → ${newStatus}`);
     if(originalSnapshot.internalNotes !== newInternal) changes.push("Internal Notes updated");
     if(originalSnapshot.customerNote !== newCustomer) changes.push("Customer Note updated");
+    if(problemUnlocked && originalSnapshot.problem !== document.getElementById("mProblemEdit").value) changes.push("Problem field trimmed/edited");
     if(newStatus === "Completed" && document.getElementById("mNoNotify").checked) changes.push("Closed without customer email");
 
     if(changes.length){
@@ -1650,6 +1670,27 @@ function formatDate(d){
   const dt = new Date(d);
   return dt.toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }) +
     " " + dt.toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit" });
+}
+
+let problemUnlocked = false;
+
+function lockProblemField(){
+  problemUnlocked = false;
+  document.getElementById("mProblem").style.display = "block";
+  document.getElementById("mProblemEdit").style.display = "none";
+  document.getElementById("problemEditHint").style.display = "none";
+  document.getElementById("problemLockBtn").textContent = "🔒";
+  document.getElementById("problemLockBtn").title = "Unlock to trim (not for adding notes)";
+}
+
+function unlockProblemField(){
+  problemUnlocked = true;
+  document.getElementById("mProblem").style.display = "none";
+  document.getElementById("mProblemEdit").style.display = "block";
+  document.getElementById("problemEditHint").style.display = "block";
+  document.getElementById("problemLockBtn").textContent = "🔓";
+  document.getElementById("problemLockBtn").title = "Unlocked — click to lock again";
+  document.getElementById("mProblemEdit").focus();
 }
 
 function formatTicketId(id){
